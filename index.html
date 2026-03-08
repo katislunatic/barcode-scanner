@@ -733,28 +733,29 @@ input[type="text"]::placeholder { color: var(--muted); }
     lookupBarcode(val);
   }
 
+  const PROXY = 'https://corsproxy.io/?url=';
+
   async function lookupBarcode(code) {
     hideAll();
     document.getElementById('loading').classList.add('visible');
 
     let found = false;
 
-    // 1. UPCitemdb — covers all product types (clothing, electronics, food, etc.)
+    // 1. UPCitemdb via CORS proxy — works for ALL retail (clothing, electronics, food, toys, etc.)
     try {
-      const res = await fetch(`https://api.upcitemdb.com/prod/trial/lookup?upc=${code}`, { headers: { 'Accept': 'application/json' } });
+      const targetUrl = 'https://api.upcitemdb.com/prod/trial/lookup?upc=' + code;
+      const res = await fetch(PROXY + encodeURIComponent(targetUrl), { headers: { 'Accept': 'application/json' } });
       if (res.ok) {
         const data = await res.json();
         if (data.items && data.items.length > 0) {
           const item = data.items[0];
           const product = {
             product_name: item.title,
-            brands: item.brand,
-            categories: item.category,
+            brands: item.brand || '',
+            categories: item.category || '',
             quantity: item.size || '',
             image_front_url: (item.images && item.images[0]) || '',
-            _offers: item.offers || [],
           };
-          // Real price from offers if available
           if (item.offers && item.offers.length > 0) {
             const prices = item.offers.map(o => parseFloat(o.price)).filter(p => p > 0);
             if (prices.length) product.price_per_unit = Math.min(...prices);
@@ -766,16 +767,15 @@ input[type="text"]::placeholder { color: var(--muted); }
       }
     } catch(e) { /* try next */ }
 
-    // 2. Open Food Facts (best for grocery/food)
+    // 2. Open Food Facts via CORS proxy — best for grocery/food
     if (!found) {
-      const foodApis = [
-        `https://world.openfoodfacts.org/api/v2/product/${code}?fields=product_name,product_name_en,brands,categories,quantity,image_front_url,image_url,price_per_unit,main_category`,
-        `https://world.openfoodfacts.net/api/v2/product/${code}?fields=product_name,product_name_en,brands,categories,quantity,image_front_url,image_url`,
-        `https://world.openbeautyfacts.org/api/v0/product/${code}.json`,
+      const foodUrls = [
+        'https://world.openfoodfacts.org/api/v2/product/' + code + '?fields=product_name,product_name_en,brands,categories,quantity,image_front_url,image_url,price_per_unit',
+        'https://world.openbeautyfacts.org/api/v0/product/' + code + '.json',
       ];
-      for (const url of foodApis) {
+      for (const rawUrl of foodUrls) {
         try {
-          const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+          const res = await fetch(PROXY + encodeURIComponent(rawUrl), { headers: { 'Accept': 'application/json' } });
           if (!res.ok) continue;
           const data = await res.json();
           const product = data.product || (data.status === 1 ? data.product : null);
@@ -791,7 +791,7 @@ input[type="text"]::placeholder { color: var(--muted); }
 
     if (!found) {
       document.getElementById('loading').classList.remove('visible');
-      showError(`Product not found for "${code}". The free databases may not have this item yet.`);
+      showError('Product not found for "' + code + '". It may not be in the public database yet.');
     }
   }
 
