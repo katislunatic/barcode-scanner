@@ -737,34 +737,61 @@ input[type="text"]::placeholder { color: var(--muted); }
     hideAll();
     document.getElementById('loading').classList.add('visible');
 
-    // Multiple API endpoints to try in order
-    const apis = [
-      () => fetch(`https://world.openfoodfacts.org/api/v2/product/${code}?fields=product_name,product_name_en,brands,categories,quantity,image_front_url,image_url,price_per_unit,main_category`, { headers: { 'Accept': 'application/json' } }),
-      () => fetch(`https://world.openfoodfacts.net/api/v2/product/${code}?fields=product_name,product_name_en,brands,categories,quantity,image_front_url,image_url`, { headers: { 'Accept': 'application/json' } }),
-      () => fetch(`https://world.openbeautyfacts.org/api/v0/product/${code}.json`),
-    ];
-
     let found = false;
-    for (const apiFn of apis) {
-      try {
-        const res = await apiFn();
-        if (!res.ok) continue;
+
+    // 1. UPCitemdb — covers all product types (clothing, electronics, food, etc.)
+    try {
+      const res = await fetch(`https://api.upcitemdb.com/prod/trial/lookup?upc=${code}`, { headers: { 'Accept': 'application/json' } });
+      if (res.ok) {
         const data = await res.json();
-        const product = data.product || (data.status === 1 ? data.product : null);
-        if (product && (product.product_name || product.product_name_en)) {
+        if (data.items && data.items.length > 0) {
+          const item = data.items[0];
+          const product = {
+            product_name: item.title,
+            brands: item.brand,
+            categories: item.category,
+            quantity: item.size || '',
+            image_front_url: (item.images && item.images[0]) || '',
+            _offers: item.offers || [],
+          };
+          // Real price from offers if available
+          if (item.offers && item.offers.length > 0) {
+            const prices = item.offers.map(o => parseFloat(o.price)).filter(p => p > 0);
+            if (prices.length) product.price_per_unit = Math.min(...prices);
+          }
           document.getElementById('loading').classList.remove('visible');
           showResult(code, product);
           found = true;
-          break;
         }
-      } catch(e) {
-        // try next
+      }
+    } catch(e) { /* try next */ }
+
+    // 2. Open Food Facts (best for grocery/food)
+    if (!found) {
+      const foodApis = [
+        `https://world.openfoodfacts.org/api/v2/product/${code}?fields=product_name,product_name_en,brands,categories,quantity,image_front_url,image_url,price_per_unit,main_category`,
+        `https://world.openfoodfacts.net/api/v2/product/${code}?fields=product_name,product_name_en,brands,categories,quantity,image_front_url,image_url`,
+        `https://world.openbeautyfacts.org/api/v0/product/${code}.json`,
+      ];
+      for (const url of foodApis) {
+        try {
+          const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+          if (!res.ok) continue;
+          const data = await res.json();
+          const product = data.product || (data.status === 1 ? data.product : null);
+          if (product && (product.product_name || product.product_name_en)) {
+            document.getElementById('loading').classList.remove('visible');
+            showResult(code, product);
+            found = true;
+            break;
+          }
+        } catch(e) { /* try next */ }
       }
     }
 
     if (!found) {
       document.getElementById('loading').classList.remove('visible');
-      showError(`No product found for "${code}". This app works best with food/grocery barcodes (EAN-13, UPC-A).`);
+      showError(`Product not found for "${code}". The free databases may not have this item yet.`);
     }
   }
 
@@ -787,13 +814,13 @@ input[type="text"]::placeholder { color: var(--muted); }
       img.classList.remove('visible');
     }
 
-    // Price (estimated)
+    // Price
     const priceEl = document.getElementById('result-price');
     if (p.price_per_unit) {
       priceEl.textContent = '$' + parseFloat(p.price_per_unit).toFixed(2);
       priceEl.style.display = '';
     } else {
-      // Generate a plausible demo price based on category
+      // Estimate based on category for food items
       const cat = (p.categories || '').toLowerCase();
       let price = null;
       if (cat.includes('drink') || cat.includes('beverage')) price = (1.5 + Math.random()*2).toFixed(2);
